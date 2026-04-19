@@ -194,6 +194,7 @@ flat = [b for r in event.message.buttons for b in r]
     BAD_TAGS = ['🅶', '🅿️', 'used', 'relister', '❌'] 
     
     for i, b in enumerate(flat):
+        
         btn_txt = b.text.lower()
         match_found = False
         
