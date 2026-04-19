@@ -41,6 +41,7 @@ def get_hwid():
 
 # --- 🎯 GLOBAL STATE ---
 targets = []
+blacklist = []
 is_attacking = False
 auto_add_enabled = False
 min_bal, max_bal = 0.0, 0.0
@@ -103,17 +104,40 @@ async def cmd_handler(event):
                 is_attacking = True
             is_command = True
 
-        # ২. 'autoadd 2-10 no' কমান্ড
-        elif t.startswith("autoadd"):
+       # --- ২. 'autoadd' কমান্ড আপডেট ---
+        elif t.startswith("autoadd") and "stop" not in t:
             parts = t.split()
             if len(parts) >= 3:
                 try:
-                    l, h = map(float, parts[1].split('-'))
-                    min_bal, max_bal, reg_required = l, h, parts[2]
-                    auto_add_enabled = True
-                    is_attacking = True 
-                    log(f"Auto-Add Active: {l}-{h} (Reg: {reg_required})", "success")
+                    # রেঞ্জ এবং রেজিস্ট্রেশন ফিল্টার সেট করা
+                    rng = re.findall(r"(\d+)", parts[1])
+                    if len(rng) >= 2:
+                        min_bal, max_bal = float(rng[0]), float(rng[1])
+                        reg_required = parts[2]
+                        auto_add_enabled, is_attacking, is_command = True, True, True
+                        log(f"Auto-Add Active: {min_bal}-{max_bal} (Reg: {reg_required})", "success")
                 except: log("Invalid autoadd format!", "error")
+
+        # --- ৩. 'stop autoadd' কমান্ড ---
+        elif t == "stop autoadd":
+            auto_add_enabled, is_command = False, True
+            log("Auto-Add Disabled!", "error")
+
+        # --- ৪. 'stop' কমান্ড (পুরো ইঞ্জিন পজ করার জন্য) ---
+        elif t == "stop":
+            is_attacking, auto_add_enabled, is_command = False, False, True
+            log("Bot Stopped Fully!", "error")
+
+        # --- ৫. 'cancel' কমান্ড আপডেট (ব্ল্যাকলিস্ট লজিক সহ) ---
+        elif t.startswith("cancel"):
+            idx_match = re.search(r"\d+", t)
+            if idx_match:
+                idx = int(idx_match.group(0)) - 1
+                if 0 <= idx < len(targets):
+                    removed = targets.pop(idx)
+                    # এই কার্ডটি ব্ল্যাকলিস্টে যাবে যাতে আর কখনোই ক্লিক না করে
+                    blacklist.append(removed)
+                    log(f"Blacklisted: {removed['bin']} (${removed['bal']})", "error")
             is_command = True
 
         # ৩. 'confirm' কমান্ড (অটো ক্লিক)
@@ -173,36 +197,45 @@ async def sniper_engine(event):
         btn_txt = b.text.lower()
         match_found = False
         
-        # লজিক ১: ওয়াচলিস্ট থেকে ম্যাচ খোঁজা
-        for t in targets:
-            if t['bin'] in btn_txt:
-                nums = [round(float(n.replace(',', '')), 2) for n in re.findall(r"\d+\.\d+", btn_txt)]
-                if any(abs(n - t['bal']) <= 0.01 for n in nums):
-                    match_found = True
-                    log(f"MATCH FOUND: {b.text}", "success")
-                    break
+        # ১. বাটন থেকে BIN এবং Balance বের করা
+        bin_m = re.search(r"(\d{6})", btn_txt)
+        num_m = re.findall(r"[\d\.\,]+", btn_txt)
         
-        # লজিক ২: বটের মেনু থেকে অটোমেটিক ক্লিন কার্ড ডিটেক্ট করা
-        if not match_found and auto_add_enabled and not any(bad in btn_txt for bad in BAD_TAGS):
-            bin_match = re.search(r"(\d{6})", btn_txt)
-            nums = [round(float(n.replace(',', '')), 2) for n in re.findall(r"\d+\.\d+", btn_txt)]
-            if bin_match and nums:
-                c_bal = nums[-1]
-                if min_bal <= c_bal <= max_bal:
-                    if not any(t['bin'] == bin_match.group(1) and t['bal'] == c_bal for t in targets):
-                        targets.append({'bin': bin_match.group(1), 'bal': c_bal})
+        if bin_m and num_m:
+            c_bin = bin_m.group(1)
+            # বাটনের একদম শেষের সংখ্যাটিকে ব্যালেন্স হিসেবে ধরবে
+            c_bal = round(float(num_m[-1].replace(',', '')), 2)
+            
+            # ২. ব্ল্যাকলিস্ট চেক (ক্যানসেল করা কার্ড হলে ইগনোর করবে)
+            if any(bl['bin'] == c_bin and bl['bal'] == c_bal for bl in blacklist):
+                continue 
+
+            # ৩. লজিক ১: ওয়াচলিস্ট থেকে ম্যাচ খোঁজা
+            for t in targets:
+                if t['bin'] in btn_txt and abs(c_bal - t['bal']) <= 0.01:
                     match_found = True
-                    log(f"AUTO-DETECTED CLEAN: {b.text}", "success")
+                    log(f"MATCH FOUND (Watchlist): {b.text}", "success")
+                    break
+            
+            # ৪. লজিক ২: অটো-ডিটেক্ট ফ্রেশ কার্ড (is_fresh ফিল্টার ব্যবহার করে)
+            if not match_found and auto_add_enabled:
+                if is_fresh(btn_txt): 
+                    if min_bal <= c_bal <= max_bal:
+                        if not any(t['bin'] == c_bin and t['bal'] == c_bal for t in targets):
+                            targets.append({'bin': c_bin, 'bal': c_bal})
+                        match_found = True
+                        log(f"FRESH CARD DETECTED: {b.text}", "success")
 
         if match_found:
+            # ৫. Purchase বাটন খুঁজে বের করা
             for row in event.message.buttons:
                 if b in row:
                     for pb in row:
                         if "purchase" in pb.text.lower(): btn_to_click = pb; break
             if not btn_to_click:
-                for pb in flat[i:i+5]:
+                for pb in flat[i:i+6]:
                     if "purchase" in pb.text.lower(): btn_to_click = pb; break
-            break 
+            break
 
     if btn_to_click:
         async with click_lock:
