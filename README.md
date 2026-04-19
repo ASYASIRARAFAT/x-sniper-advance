@@ -9,7 +9,7 @@ pkg update && pkg upgrade -y
 pkg install git python -y
 
 # 3. Clone the repository
-git clone [https://github.com/ASYASIRARAFAT/x-sniper-advance.git](https://github.com/ASYASIRARAFAT/x-sniper-advance.git)
+git clone https://github.com/ASYASIRARAFAT/x-sniper-advance.git
 
 # 4. Open the directory
 cd x-sniper-advance
@@ -18,4 +18,4 @@ cd x-sniper-advance
 pip install -r requirements.txt
 
 # 6. Run the Cyber-Sniper Engine
-python sniper.py
+python x-sniper.py
