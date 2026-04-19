@@ -188,4 +188,166 @@ async def sniper_engine(event):
     if "main listings" not in msg_text and "total cards" not in msg_text: return
     
     btn_to_click = None
-    flat = [b for r in event.message.buttons for b in
+
+
+flat = [b for r in event.message.buttons for b in r]
+    BAD_TAGS = ['🅶', '🅿️', 'used', 'relister', '❌'] 
+    
+    for i, b in enumerate(flat):
+        btn_txt = b.text.lower()
+        match_found = False
+        
+        # Method 1: Check Manual Targets
+        for t in targets:
+            if t['bin'] in btn_txt:
+                nums = [round(float(n.replace(',', '')), 2) for n in re.findall(r"\d+\.\d+", btn_txt)]
+                if any(abs(n - t['bal']) <= 0.01 for n in nums):
+                    match_found = True
+                    log(f"MATCH FOUND (Watchlist): {b.text}", "success")
+                    break
+        
+        # Method 2: Check Auto-Clean Cards (Bot Internal Scraper)
+        if not match_found and auto_add_enabled:
+            if not any(bad in btn_txt for bad in BAD_TAGS):
+                bin_match = re.search(r"(\d{6})", btn_txt)
+                nums = [round(float(n.replace(',', '')), 2) for n in re.findall(r"\d+\.\d+", btn_txt)]
+                
+                if bin_match and nums:
+                    c_bin = bin_match.group(1)
+                    c_bal = nums[-1] 
+                    
+                    if min_bal <= c_bal <= max_bal:
+                        if not any(t['bin'] == c_bin and t['bal'] == c_bal for t in targets):
+                            targets.append({'bin': c_bin, 'bal': c_bal})
+                        match_found = True
+                        log(f"AUTO-DETECTED CLEAN CARD: {b.text}", "success")
+        
+        # Execution Logic: Find Purchase Button
+        if match_found:
+            for row in event.message.buttons:
+                if b in row:
+                    for pb in row:
+                        if "purchase" in pb.text.lower():
+                            btn_to_click = pb; break
+                    if btn_to_click: break
+            
+            if not btn_to_click:
+                row_index = next(idx for idx, r in enumerate(event.message.buttons) if b in r)
+                for r in event.message.buttons[row_index+1:row_index+3]:
+                    for pb in r:
+                        if "purchase" in pb.text.lower():
+                            btn_to_click = pb; break
+                    if btn_to_click: break
+            
+            if not btn_to_click:
+                for pb in flat[i:i+4]:
+                    if "purchase" in pb.text.lower():
+                        btn_to_click = pb; break
+            break 
+
+    # --- CLICK TRIGGER ---
+    if btn_to_click:
+        async with click_lock:
+            is_attacking = False 
+            log("Executing Purchase Click...", "wait")
+            await btn_to_click.click()
+            await asyncio.sleep(0.15) 
+            await btn_to_click.click()
+            log("Purchase Completed! Waiting for confirmation...", "success")
+            return
+    else:
+        # Auto Refresh
+        refresh_btn = next((b for b in flat if any(k in b.text for k in ["Refresh","🔄","Reload"])), None)
+        if refresh_btn:
+            await asyncio.sleep(random.uniform(0.2, 0.4))
+            try: await refresh_btn.click()
+            except: pass
+
+# --- 🖥️ MENU SYSTEM (Terminal Async UI) ---
+async def main():
+    ui_header()
+    uid = get_hwid()
+    log("Verifying HWID...", "wait")
+    try:
+        res = requests.get(RAW_LINK, timeout=10).text
+        if uid not in res:
+            ui_header()
+            log(f"ACCESS DENIED! Your HWID: {uid}", "error")
+            print(f"\n{Y}Send Code to Developer for approve{W}")
+            print(f"{C}Code automatically copied! Opening Facebook...{W}\n")
+            os.system(f"termux-clipboard-set '{uid}' 2>/dev/null")
+            os.system(f"termux-open-url '{FB_LINK}' 2>/dev/null")
+            sys.exit()
+        log("Access Granted!", "success")
+    except: 
+        log("Security Check Failed! Check internet.", "error")
+        sys.exit()
+    
+    await client.start()
+    
+    while True:
+        ui_header()
+        print(f"\n{G}[1]{W} Add Target Manually")
+        print(f"{G}[2]{W} Auto-Add (Scrapper) Settings")
+        print(f"{G}[3]{W} Show Watchlist & Manage")
+        print(f"{G}[4]{W} START HUNTING ENGINE")
+        print(f"{C}[5]{W} Contact with Developer")
+        print(f"{C}[6]{W} How to Use (Tutorial)")
+        print(f"{R}[X]{W} Exit Tool\n")
+        
+        choice = (await async_input(f"{C}x-sniper> {W}")).lower().strip()
+        
+        if choice == "1":
+            try:
+                b = (await async_input(f"{C}BIN (e.g. 451129xx): {W}")).lower().replace('x', '')
+                bal = round(float((await async_input(f"{C}Balance: {W}")).replace('$', '')), 2)
+                if not any(t['bin'] == b and t['bal'] == bal for t in targets):
+                    targets.append({'bin': b, 'bal': bal})
+                    log("Target Added Successfully!", "success")
+                else:
+                    log("Target already exists in Watchlist!", "error")
+            except: log("Invalid Input!", "error")
+            await async_input("\nEnter to return...")
+            
+        elif choice == "2":
+            try:
+                rng = await async_input(f"{C}Range (e.g. 5-20): {W}")
+                reg = (await async_input(f"{C}Registered (yes/no): {W}")).lower()
+                l, h = map(float, rng.split('-'))
+                globals().update({'min_bal':l, 'max_bal':h, 'reg_required':reg, 'auto_add_enabled':True})
+                log("Scrapper Activated!", "success")
+            except: log("Invalid Range format!", "error")
+            await async_input("\nEnter to return...")
+            
+        elif choice == "3":
+            ui_header()
+            print(f"\n{C}--- CURRENT WATCHLIST ---{W}")
+            if not targets: print(f"{R}No targets added!{W}")
+            for i, t in enumerate(targets, 1):
+                print(f"{G}{i}.{W} BIN: {t['bin']} | Bal: ${t['bal']}")
+            print(f"\n{Y}Tip: Type 'cancel [number]' in Bot chat to remove targets.{W}")
+            await async_input("\nEnter to return...")
+            
+        elif choice == "4":
+            globals()['is_attacking'] = True
+            ui_header()
+            log("SNIPER ENGINE IS LIVE AND SCANNING IN BACKGROUND!", "success")
+            log("Terminal Menu is paused. Press CTRL+C to Stop Script.", "wait")
+            log("You can now control the bot fully via TELEGRAM.", "info")
+            print(f"{C}--------------------------------------------------{W}")
+            await client.run_until_disconnected()
+            
+        elif choice == "5":
+            log("Opening Facebook...", "wait")
+            os.system(f"termux-open-url '{FB_LINK}' 2>/dev/null")
+            
+        elif choice == "6":
+            log("Opening Tutorial...", "wait")
+            os.system(f"termux-open-url '{TUTORIAL_LINK}' 2>/dev/null")
+            
+        elif choice == "x":
+            log("Exiting Engine...", "wait")
+            sys.exit()
+
+if __name__ == "__main__":
+    client.loop.run_until_complete(main())
