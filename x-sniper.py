@@ -62,7 +62,7 @@ def load_config():
 API_ID, API_HASH = load_config()
 client = TelegramClient('sniper_session', API_ID, API_HASH)
 
-# --- 🛰️ SCRAPPER 1: STOCK CHANNEL ---
+# --- 🛰️ SCRAPPER: STOCK CHANNEL ---
 @client.on(events.NewMessage(chats=STOCK_CHANNEL_ID))
 async def stock_scrapper(event):
     global targets
@@ -73,12 +73,10 @@ async def stock_scrapper(event):
         bin_m = re.search(r"BIN: (\d+xx)", text)
         bal_m = re.search(r"Balance: USD \$([\d\.\,]+)", text)
         reg_m = re.search(r"Registered: (\w+)", text)
-        
         if bin_m and bal_m:
             c_bin = bin_m.group(1).lower().replace('x', '')
             c_bal = round(float(bal_m.group(1).replace(',', '')), 2)
             is_reg = reg_m.group(1).lower()
-            
             if min_bal <= c_bal <= max_bal:
                 if (reg_required == "yes" and is_reg == "true") or (reg_required == "no" and is_reg == "false"):
                     if not any(t['bin'] == c_bin and t['bal'] == c_bal for t in targets):
@@ -86,101 +84,81 @@ async def stock_scrapper(event):
                         log(f"Auto-Added from Stock: {c_bin} (${c_bal})", "success")
     except: pass
 
-# --- 📩 COMMAND HANDLER (Telegram Stealth Mode) ---
+# --- 📩 COMMAND HANDLER (Telegram Smart Interface) ---
 @client.on(events.NewMessage(outgoing=True))
 async def cmd_handler(event):
     global targets, is_attacking, auto_add_enabled, min_bal, max_bal, reg_required
     t = event.raw_text.lower().strip()
     is_command = False
-    
     try:
-        # 🔥 ম্যাজিক ১: 'add 435880xx 10' বা 'buy 435880xx 10'
+        # ১. 'add 435880xx 10' কমান্ড
         if t.startswith("add") or t.startswith("buy"):
             parts = t.split()
             if len(parts) >= 3:
-                # 'xx' এবং '$' চিহ্ন মুছে ক্লিন করবে
                 c_bin = parts[1].replace('x', '') 
                 c_bal = round(float(parts[2].replace('$', '')), 2)
-                
                 if not any(target['bin'] == c_bin and target['bal'] == c_bal for target in targets):
                     targets.append({'bin': c_bin, 'bal': c_bal})
-                    log(f"Target Loaded via Telegram: {c_bin} (${c_bal})", "success")
-                else:
-                    log(f"Target already exists: {c_bin}", "wait")
-                
+                    log(f"Target Added: {c_bin} (${c_bal})", "success")
                 is_attacking = True
-                log("Sniper Mode ACTIVE", "success")
             is_command = True
-            
-        # 🔥 ম্যাজিক ২: 'autoadd 2-10 no' 
+
+        # ২. 'autoadd 2-10 no' কমান্ড
         elif t.startswith("autoadd"):
             parts = t.split()
             if len(parts) >= 3:
-                rng = parts[1]
-                reg = parts[2]
                 try:
-                    l, h = map(float, rng.split('-'))
-                    min_bal, max_bal, reg_required = l, h, reg
+                    l, h = map(float, parts[1].split('-'))
+                    min_bal, max_bal, reg_required = l, h, parts[2]
                     auto_add_enabled = True
                     is_attacking = True 
-                    log(f"Auto-Scraper Active! Range: ${l}-${h} | Reg: {reg}", "success")
-                except:
-                    log("Invalid autoadd format!", "error")
+                    log(f"Auto-Add Active: {l}-{h} (Reg: {reg_required})", "success")
+                except: log("Invalid autoadd format!", "error")
             is_command = True
 
-        elif t.startswith("cancel"):
-            idx = int(t.split()[1]) - 1
-            if 0 <= idx < len(targets):
-                removed = targets.pop(idx)
-                log(f"Target Removed: {removed['bin']}", "error")
-            is_command = True
-            
-        elif t == "start":
-            is_attacking = True
-            log("Sniper Mode ACTIVE", "success")
-            is_command = True
-            
-        elif t == "stop":
-            is_attacking = False
-            log("Sniper Mode PAUSED", "wait")
-            is_command = True
-            
-        # 🔥 ম্যাজিক ৩: 'confirm'
+        # ৩. 'confirm' কমান্ড (অটো ক্লিক)
         elif t == "confirm":
             is_command = True
-            log("Auto-Confirm triggered! Searching...", "wait")
+            log("Auto-Confirm triggered...", "wait")
             async for msg in client.iter_messages(BOT_USERNAME, limit=5):
                 if msg.buttons:
                     for row in msg.buttons:
                         for b in row:
-                            if "confirm" in b.text.lower() or "yes" in b.text.lower():
+                            if any(k in b.text.lower() for k in ["confirm", "yes"]):
                                 await b.click()
                                 log("Confirm Button Clicked!", "success")
                                 break
 
-        # কমান্ড মেসেজ অটো ডিলিট (যাতে বট এরর না দেয়)
+        # ৪. অন্যান্য কমান্ড (start, stop, cancel)
+        elif t.startswith("cancel"):
+            idx = int(t.split()[1]) - 1
+            if 0 <= idx < len(targets):
+                removed = targets.pop(idx)
+                log(f"Removed: {removed['bin']}", "error")
+            is_command = True
+        elif t == "start": is_attacking, is_command = True, True
+        elif t == "stop": is_attacking, is_command = False, True
+        
+        # কমান্ড মেসেজ ডিলিট (যাতে বটের এরর না আসে)
         if is_command:
             try: await event.delete()
             except: pass
-            
     except: pass
 
-# --- ⚡ THE HUNTING ENGINE ---
+# --- ⚡ THE HUNTING ENGINE (Bot Scraper Inside) ---
 @client.on(events.NewMessage(chats=BOT_USERNAME))
 @client.on(events.MessageEdited(chats=BOT_USERNAME))
 async def sniper_engine(event):
     global is_attacking
     msg_text = event.message.text.lower()
     
-    # 1. Smart Pause
-    if "confirm your purchase" in msg_text or "successfully purchased" in msg_text:
+    if any(k in msg_text for k in ["confirm your purchase", "successfully purchased"]):
         is_attacking = False
-        log("PAUSED: Action required in Bot. (Type 'confirm' to auto-click)", "wait")
+        log("PAUSED: Action required in Bot.", "wait")
         return
         
-    # 2. Ignore Sold Out
-    if "already bought" in msg_text or "someone else" in msg_text:
-        log("Item Sold Out! Continuing Scan...", "error")
+    if any(k in msg_text for k in ["already bought", "someone else"]):
+        log("Sold Out! Continuing Scan...", "error")
         is_attacking = True
         return
     
@@ -188,100 +166,76 @@ async def sniper_engine(event):
     if "main listings" not in msg_text and "total cards" not in msg_text: return
     
     btn_to_click = None
-
-
-flat = [b for r in event.message.buttons for b in r]
+    flat = [b for r in event.message.buttons for b in r]
     BAD_TAGS = ['🅶', '🅿️', 'used', 'relister', '❌'] 
     
     for i, b in enumerate(flat):
-        
         btn_txt = b.text.lower()
         match_found = False
         
-        # Method 1: Check Manual Targets
+        # লজিক ১: ওয়াচলিস্ট থেকে ম্যাচ খোঁজা
         for t in targets:
             if t['bin'] in btn_txt:
                 nums = [round(float(n.replace(',', '')), 2) for n in re.findall(r"\d+\.\d+", btn_txt)]
                 if any(abs(n - t['bal']) <= 0.01 for n in nums):
                     match_found = True
-                    log(f"MATCH FOUND (Watchlist): {b.text}", "success")
+                    log(f"MATCH FOUND: {b.text}", "success")
                     break
         
-        # Method 2: Check Auto-Clean Cards (Bot Internal Scraper)
-        if not match_found and auto_add_enabled:
-            if not any(bad in btn_txt for bad in BAD_TAGS):
-                bin_match = re.search(r"(\d{6})", btn_txt)
-                nums = [round(float(n.replace(',', '')), 2) for n in re.findall(r"\d+\.\d+", btn_txt)]
-                
-                if bin_match and nums:
-                    c_bin = bin_match.group(1)
-                    c_bal = nums[-1] 
-                    
-                    if min_bal <= c_bal <= max_bal:
-                        if not any(t['bin'] == c_bin and t['bal'] == c_bal for t in targets):
-                            targets.append({'bin': c_bin, 'bal': c_bal})
-                        match_found = True
-                        log(f"AUTO-DETECTED CLEAN CARD: {b.text}", "success")
-        
-        # Execution Logic: Find Purchase Button
+        # লজিক ২: বটের মেনু থেকে অটোমেটিক ক্লিন কার্ড ডিটেক্ট করা
+        if not match_found and auto_add_enabled and not any(bad in btn_txt for bad in BAD_TAGS):
+            bin_match = re.search(r"(\d{6})", btn_txt)
+            nums = [round(float(n.replace(',', '')), 2) for n in re.findall(r"\d+\.\d+", btn_txt)]
+            if bin_match and nums:
+                c_bal = nums[-1]
+                if min_bal <= c_bal <= max_bal:
+                    if not any(t['bin'] == bin_match.group(1) and t['bal'] == c_bal for t in targets):
+                        targets.append({'bin': bin_match.group(1), 'bal': c_bal})
+                    match_found = True
+                    log(f"AUTO-DETECTED CLEAN: {b.text}", "success")
+
         if match_found:
             for row in event.message.buttons:
                 if b in row:
                     for pb in row:
-                        if "purchase" in pb.text.lower():
-                            btn_to_click = pb; break
-                    if btn_to_click: break
-            
+                        if "purchase" in pb.text.lower(): btn_to_click = pb; break
             if not btn_to_click:
-                row_index = next(idx for idx, r in enumerate(event.message.buttons) if b in r)
-                for r in event.message.buttons[row_index+1:row_index+3]:
-                    for pb in r:
-                        if "purchase" in pb.text.lower():
-                            btn_to_click = pb; break
-                    if btn_to_click: break
-            
-            if not btn_to_click:
-                for pb in flat[i:i+4]:
-                    if "purchase" in pb.text.lower():
-                        btn_to_click = pb; break
+                for pb in flat[i:i+5]:
+                    if "purchase" in pb.text.lower(): btn_to_click = pb; break
             break 
 
-    # --- CLICK TRIGGER ---
     if btn_to_click:
         async with click_lock:
             is_attacking = False 
-            log("Executing Purchase Click...", "wait")
+            log("Executing Purchase...", "wait")
             await btn_to_click.click()
             await asyncio.sleep(0.15) 
             await btn_to_click.click()
-            log("Purchase Completed! Waiting for confirmation...", "success")
-            return
+            log("Click Sent! Check Bot.", "success")
     else:
-        # Auto Refresh
-        refresh_btn = next((b for b in flat if any(k in b.text for k in ["Refresh","🔄","Reload"])), None)
+        # রিফ্রেশ বাটন হ্যান্ডেলার
+        refresh_btn = next((b for b in flat if any(k in b.text.lower() for k in ["refresh", "🔄", "reload"])), None)
         if refresh_btn:
             await asyncio.sleep(random.uniform(0.2, 0.4))
             try: await refresh_btn.click()
             except: pass
 
-# --- 🖥️ MENU SYSTEM (Terminal Async UI) ---
+# --- 🖥️ MENU SYSTEM (Terminal Interface) ---
 async def main():
     ui_header()
     uid = get_hwid()
-    log("Verifying HWID...", "wait")
+    log("Verifying HWID Security...", "wait")
     try:
         res = requests.get(RAW_LINK, timeout=10).text
         if uid not in res:
             ui_header()
-            log(f"ACCESS DENIED! Your HWID: {uid}", "error")
-            print(f"\n{Y}Send Code to Developer for approve{W}")
-            print(f"{C}Code automatically copied! Opening Facebook...{W}\n")
+            log(f"ACCESS DENIED! HWID: {uid}", "error")
             os.system(f"termux-clipboard-set '{uid}' 2>/dev/null")
             os.system(f"termux-open-url '{FB_LINK}' 2>/dev/null")
             sys.exit()
         log("Access Granted!", "success")
     except: 
-        log("Security Check Failed! Check internet.", "error")
+        log("Internet/Security error!", "error")
         sys.exit()
     
     await client.start()
@@ -300,55 +254,34 @@ async def main():
         
         if choice == "1":
             try:
-                b = (await async_input(f"{C}BIN (e.g. 451129xx): {W}")).lower().replace('x', '')
-                bal = round(float((await async_input(f"{C}Balance: {W}")).replace('$', '')), 2)
-                if not any(t['bin'] == b and t['bal'] == bal for t in targets):
-                    targets.append({'bin': b, 'bal': bal})
-                    log("Target Added Successfully!", "success")
-                else:
-                    log("Target already exists in Watchlist!", "error")
+                b = (await async_input("BIN: ")).replace('x', '')
+                bal = round(float((await async_input("Bal: ")).replace('$', '')), 2)
+                targets.append({'bin': b, 'bal': bal})
+                log("Target Added Successfully!", "success")
             except: log("Invalid Input!", "error")
             await async_input("\nEnter to return...")
-            
         elif choice == "2":
             try:
-                rng = await async_input(f"{C}Range (e.g. 5-20): {W}")
-                reg = (await async_input(f"{C}Registered (yes/no): {W}")).lower()
+                rng = await async_input("Range (e.g. 5-10): ")
+                reg = await async_input("Reg (yes/no): ")
                 l, h = map(float, rng.split('-'))
                 globals().update({'min_bal':l, 'max_bal':h, 'reg_required':reg, 'auto_add_enabled':True})
-                log("Scrapper Activated!", "success")
-            except: log("Invalid Range format!", "error")
+                log("Auto-Add Settings Activated!", "success")
+            except: log("Error!", "error")
             await async_input("\nEnter to return...")
-            
         elif choice == "3":
             ui_header()
             print(f"\n{C}--- CURRENT WATCHLIST ---{W}")
-            if not targets: print(f"{R}No targets added!{W}")
-            for i, t in enumerate(targets, 1):
-                print(f"{G}{i}.{W} BIN: {t['bin']} | Bal: ${t['bal']}")
-            print(f"\n{Y}Tip: Type 'cancel [number]' in Bot chat to remove targets.{W}")
+            for i, t in enumerate(targets, 1): print(f"{G}{i}.{W} {t['bin']} (${t['bal']})")
             await async_input("\nEnter to return...")
-            
         elif choice == "4":
             globals()['is_attacking'] = True
             ui_header()
-            log("SNIPER ENGINE IS LIVE AND SCANNING IN BACKGROUND!", "success")
-            log("Terminal Menu is paused. Press CTRL+C to Stop Script.", "wait")
-            log("You can now control the bot fully via TELEGRAM.", "info")
-            print(f"{C}--------------------------------------------------{W}")
+            log("SNIPER ENGINE IS LIVE!", "success")
             await client.run_until_disconnected()
-            
-        elif choice == "5":
-            log("Opening Facebook...", "wait")
-            os.system(f"termux-open-url '{FB_LINK}' 2>/dev/null")
-            
-        elif choice == "6":
-            log("Opening Tutorial...", "wait")
-            os.system(f"termux-open-url '{TUTORIAL_LINK}' 2>/dev/null")
-            
-        elif choice == "x":
-            log("Exiting Engine...", "wait")
-            sys.exit()
+        elif choice == "5": os.system(f"termux-open-url '{FB_LINK}'")
+        elif choice == "6": os.system(f"termux-open-url '{TUTORIAL_LINK}'")
+        elif choice == "x": sys.exit()
 
 if __name__ == "__main__":
     client.loop.run_until_complete(main())
